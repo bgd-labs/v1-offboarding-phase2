@@ -5945,7 +5945,7 @@ contract LendingPoolLiquidationManager is ReentrancyGuard, VersionedInitializabl
    * of the LendingPool contract, the getRevision() function is needed.
    */
   function getRevision() internal pure returns (uint256) {
-    return 1;
+    return 2;
   }
 
   /**
