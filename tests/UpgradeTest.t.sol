@@ -111,7 +111,7 @@ contract UpgradeTest is Test {
         users[i].debt,
         users[i].user
       );
-      // offboarding liquidations should provide a fixed 1% bonus
+      // offboarding liquidations should provide a fixed 3% bonus
       (, uint256 totalCollateralETHBefore, uint256 totalBorrowsETHBefore, , , , , ) = POOL
         .getUserAccountData(users[i].user);
       if (users[i].debt == 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE) {
