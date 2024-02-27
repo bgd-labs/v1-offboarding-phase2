@@ -37,6 +37,25 @@ interface ILendingPool {
       uint256 ltv,
       uint256 healthFactor
     );
+
+  function getUserReserveData(
+    address _reserve,
+    address _user
+  )
+    external
+    view
+    returns (
+      uint256 currentATokenBalance,
+      uint256 currentBorrowBalance,
+      uint256 principalBorrowBalance,
+      uint256 borrowRateMode,
+      uint256 borrowRate,
+      uint256 liquidityRate,
+      uint256 originationFee,
+      uint256 variableBorrowIndex,
+      uint256 lastUpdateTimestamp,
+      bool usageAsCollateralEnabled
+    );
 }
 
 interface ILendingPoolAddressesProvider {
@@ -52,15 +71,15 @@ interface ILendingPoolAddressesProvider {
 }
 
 contract UpgradeTest is Test {
-  ILendingPoolAddressesProvider public constant provider =
+  ILendingPoolAddressesProvider public constant ADDRESSES_PROVIDER =
     ILendingPoolAddressesProvider(0x24a42fD28C976A61Df5D00D0599C34c4f90748c8);
 
   address public manager; //= ILendingPoolLiquidationManager(0x31cceeb1fA3DbEAf7baaD25125b972A17624A40a);
 
-  ILendingPool public pool = ILendingPool(0x398eC7346DcD622eDc5ae82352F02bE94C62d119);
+  ILendingPool public constant POOL = ILendingPool(0x398eC7346DcD622eDc5ae82352F02bE94C62d119);
 
   function setUp() public {
-    vm.createSelectFork(vm.rpcUrl('mainnet'), 18770009);
+    vm.createSelectFork(vm.rpcUrl('mainnet'), 19233649);
     // deploy liquidationManager
     bytes memory liquidationManagerBytecode = abi.encodePacked(
       vm.getCode('UpdatedLendingPoolLiquidationManager.sol:LendingPoolLiquidationManager')
@@ -74,17 +93,8 @@ contract UpgradeTest is Test {
       )
     }
     manager = liquidationManager;
-    // deploy pool
-    bytes memory lendingPoolBytecode = abi.encodePacked(
-      vm.getCode('UpdatedLendingPool.sol:LendingPool')
-    );
-    address poolImpl;
-    assembly {
-      poolImpl := create(0, add(lendingPoolBytecode, 0x20), mload(lendingPoolBytecode))
-    }
     vm.startPrank(GovernanceV3Ethereum.EXECUTOR_LVL_1);
-    provider.setLendingPoolLiquidationManager(manager);
-    provider.setLendingPoolImpl(poolImpl);
+    ADDRESSES_PROVIDER.setLendingPoolLiquidationManager(manager);
     vm.stopPrank();
   }
 
@@ -94,33 +104,55 @@ contract UpgradeTest is Test {
     address debt;
   }
 
-  function test_healthyLiquidateShouldUse100bpsLB() public {
-    V1User[] memory users = new V1User[](1);
-    users[0] = V1User(
-      0x1F0aeAeE69468727BA258B0cf692E6bfecc2E286,
-      0x514910771AF9Ca656af840dff83E8264EcF986CA, // LINK
-      0x0000000000085d4780B73119b644AE5ecd22b376 // TUSD
-    );
+  function test_healthyLiquidateShouldUse300bpsLB() public {
+    V1User[] memory users = _getUsers();
     for (uint256 i = 0; i < users.length; i++) {
-      deal(users[i].debt, address(this), 26936742563757401924489);
-      // offboarding liquidations should provide a fixed 1% bonus
-      (, uint256 totalCollateralETHBefore, uint256 totalBorrowsETHBefore, , , , , ) = pool
-        .getUserAccountData(users[i].user);
-      IERC20(users[i].debt).approve(provider.getLendingPoolCore(), type(uint256).max);
-      pool.liquidationCall(
-        users[i].collateral,
+      (, uint256 currentBorrowBalance, , , , , , , , ) = POOL.getUserReserveData(
         users[i].debt,
-        users[i].user,
-        type(uint256).max,
-        false
+        users[i].user
       );
-      (, uint256 totalCollateralETHAfter, uint256 totalBorrowsETHAfter, , , , , ) = pool
+      // offboarding liquidations should provide a fixed 3% bonus
+      (, uint256 totalCollateralETHBefore, uint256 totalBorrowsETHBefore, , , , , ) = POOL
+        .getUserAccountData(users[i].user);
+      if (users[i].debt == 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE) {
+        deal(address(this), 1000 ether);
+        POOL.liquidationCall{value: currentBorrowBalance}(
+          users[i].collateral,
+          users[i].debt,
+          users[i].user,
+          type(uint256).max,
+          false
+        );
+      } else {
+        deal(users[i].debt, address(this), currentBorrowBalance);
+        assertEq(currentBorrowBalance, IERC20(users[i].debt).balanceOf(address(this)));
+        IERC20(users[i].debt).approve(ADDRESSES_PROVIDER.getLendingPoolCore(), 0);
+        IERC20(users[i].debt).approve(ADDRESSES_PROVIDER.getLendingPoolCore(), type(uint256).max);
+        POOL.liquidationCall(
+          users[i].collateral,
+          users[i].debt,
+          users[i].user,
+          type(uint256).max,
+          false
+        );
+      }
+      (, uint256 totalCollateralETHAfter, uint256 totalBorrowsETHAfter, , , , , ) = POOL
         .getUserAccountData(users[i].user);
 
       uint256 collateralDiff = totalCollateralETHBefore - totalCollateralETHAfter;
       uint256 borrowsDiff = totalBorrowsETHBefore - totalBorrowsETHAfter;
       assertGt(collateralDiff, borrowsDiff);
-      assertApproxEqAbs((borrowsDiff * 1 ether) / collateralDiff, 0.99 ether, 0.001 ether); // should be ~1% + rounding
+      assertApproxEqAbs((borrowsDiff * 1 ether) / collateralDiff, 0.97 ether, 0.001 ether); // should be ~3% + rounding
     }
+  }
+
+  function _getUsers() internal pure returns (V1User[] memory) {
+    V1User[] memory users = new V1User[](1);
+    users[0] = V1User(
+      payable(0x1F0aeAeE69468727BA258B0cf692E6bfecc2E286),
+      0x514910771AF9Ca656af840dff83E8264EcF986CA, // LINK
+      0x0000000000085d4780B73119b644AE5ecd22b376 // TUSD
+    );
+    return users;
   }
 }
